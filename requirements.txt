@@ -1,5 +1,6 @@
 pandas
 numpy
-streamlit
+streamlit==1.29.0
 plotly
 openpyxl
+altair==4.2.2
