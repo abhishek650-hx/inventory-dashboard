@@ -1,6 +1,6 @@
-pandas
-numpy
 streamlit==1.29.0
-plotly
-openpyxl
+pandas==2.0.3
+numpy==1.24.4
+plotly==5.18.0
+openpyxl==3.1.2
 altair==4.2.2
