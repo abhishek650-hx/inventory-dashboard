@@ -12,7 +12,11 @@ st.set_page_config(page_title="Inventory System", layout="wide")
 # ----------------------------
 # DB CONNECTION
 # ----------------------------
-engine = create_engine(st.secrets["DB_URL"])
+try:
+    engine = create_engine(st.secrets["DB_URL"])
+except Exception as e:
+    st.error("❌ Database connection failed. Check DB_URL in secrets.")
+    st.stop()
 
 # ----------------------------
 # CUSTOM UI STYLING
@@ -40,16 +44,18 @@ def load_data():
     try:
         df = pd.read_sql("SELECT * FROM inventory", engine)
         return df
-    except:
+    except Exception as e:
+        st.error(f"❌ Error loading data: {e}")
         return pd.DataFrame()
 
 df = load_data()
 
 # ----------------------------
-# HANDLE EMPTY DB
+# HANDLE EMPTY DATA
 # ----------------------------
 if df.empty:
-    st.warning("⚠️ No data found. Please upload CSV from sidebar.")
+    st.warning("⚠️ No data found in database.")
+    st.info("👉 Check if data is uploaded in Supabase OR DB_URL is correct.")
     st.stop()
 
 # ----------------------------
@@ -82,45 +88,42 @@ df['recommendation'] = df.apply(
 st.sidebar.markdown("## 📦 Inventory System")
 st.sidebar.markdown("---")
 
-# 🔥 CSV Upload (Dynamic Update)
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-
-if uploaded_file:
-    new_df = pd.read_csv(uploaded_file)
-
-    # Column mapping
-    new_df.rename(columns={
-        'name': 'product_name',
-        'Category': 'category',
-        'quantity': 'demand',
-        'availableQuantity': 'available_quantity'
-    }, inplace=True)
-
-    new_df = new_df[['product_name', 'category', 'mrp', 'demand', 'available_quantity']]
-
-    new_df['last_updated'] = pd.Timestamp.now()
-
-    new_df.to_sql("inventory", engine, if_exists="replace", index=False)
-
-    st.sidebar.success("✅ Database Updated!")
-
-    st.cache_data.clear()
-    st.rerun()
-
-# 🔄 Refresh button
+# 🔄 Refresh
 if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
+# 📂 CSV Upload (Optional update)
+uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+
+if uploaded_file:
+    try:
+        new_df = pd.read_csv(uploaded_file)
+
+        new_df.rename(columns={
+            'name': 'product_name',
+            'Category': 'category',
+            'quantity': 'demand',
+            'availableQuantity': 'available_quantity'
+        }, inplace=True)
+
+        new_df = new_df[['product_name', 'category', 'mrp', 'demand', 'available_quantity']]
+        new_df['last_updated'] = pd.Timestamp.now()
+
+        new_df.to_sql("inventory", engine, if_exists="replace", index=False)
+
+        st.sidebar.success("✅ Database updated successfully!")
+
+        st.cache_data.clear()
+        st.rerun()
+
+    except Exception as e:
+        st.sidebar.error(f"❌ Upload failed: {e}")
+
 # Navigation
-menu = st.sidebar.radio("Navigation", [
-    "Dashboard",
-    "Insights",
-    "Data"
-])
+menu = st.sidebar.radio("Navigation", ["Dashboard", "Insights", "Data"])
 
 category = st.sidebar.selectbox("Category", df['category'].dropna().unique())
-
 filtered_df = df[df['category'] == category]
 
 # ----------------------------
@@ -173,23 +176,12 @@ if menu == "Dashboard":
         st.subheader("Category Demand")
         cat = df.groupby('category')['demand'].sum().reset_index()
 
-        fig3 = px.pie(
-            cat,
-            names='category',
-            values='demand',
-            template='plotly_dark'
-        )
+        fig3 = px.pie(cat, names='category', values='demand', template='plotly_dark')
         st.plotly_chart(fig3, use_container_width=True)
 
     with col4:
         st.subheader("Stock Distribution")
-
-        fig4 = px.histogram(
-            filtered_df,
-            x='available_quantity',
-            nbins=20,
-            template='plotly_dark'
-        )
+        fig4 = px.histogram(filtered_df, x='available_quantity', nbins=20, template='plotly_dark')
         st.plotly_chart(fig4, use_container_width=True)
 
 # ----------------------------
@@ -207,18 +199,10 @@ elif menu == "Insights":
         st.success("Inventory is healthy ✅")
 
     st.subheader("Critical Products")
-
-    st.dataframe(
-        alerts[['product_name', 'available_quantity', 'ROP', 'EOQ']],
-        use_container_width=True
-    )
+    st.dataframe(alerts[['product_name', 'available_quantity', 'ROP', 'EOQ']], use_container_width=True)
 
     st.subheader("Recommendations")
-
-    st.dataframe(
-        filtered_df[['product_name', 'recommendation']],
-        use_container_width=True
-    )
+    st.dataframe(filtered_df[['product_name', 'recommendation']], use_container_width=True)
 
 # ----------------------------
 # DATA
@@ -237,6 +221,3 @@ elif menu == "Data":
         "inventory.csv",
         "text/csv"
     )
-st.write("DB connected")
-st.write("Rows:", len(df))
-st.dataframe(df.head())
