@@ -36,6 +36,25 @@ h1, h2, h3 {color: #f9fafb;}
 </style>
 """, unsafe_allow_html=True)
 
+st.subheader("📈 Demand Forecast")
+
+selected_product = st.selectbox(
+    "Select Product for Forecast",
+    df['product_name'].unique()
+)
+
+forecast = forecast_demand(df, selected_product)
+
+fig_forecast = px.line(
+    forecast,
+    x='ds',
+    y='yhat',
+    title="7-Day Demand Forecast",
+    template='plotly_dark'
+)
+
+st.plotly_chart(fig_forecast, use_container_width=True)
+
 # ----------------------------
 # LOAD DATA FROM DATABASE
 # ----------------------------
@@ -125,6 +144,23 @@ menu = st.sidebar.radio("Navigation", ["Dashboard", "Insights", "Data"])
 
 category = st.sidebar.selectbox("Category", df['category'].dropna().unique())
 filtered_df = df[df['category'] == category]
+
+from prophet import Prophet
+
+def forecast_demand(df, product_name):
+    product_df = df[df['product_name'] == product_name].copy()
+
+    # Create fake date column (since we don't have time series yet)
+    product_df['ds'] = pd.date_range(end=pd.Timestamp.today(), periods=len(product_df))
+    product_df['y'] = product_df['demand']
+
+    model = Prophet()
+    model.fit(product_df[['ds', 'y']])
+
+    future = model.make_future_dataframe(periods=7)
+    forecast = model.predict(future)
+
+    return forecast
 
 # ----------------------------
 # DASHBOARD
