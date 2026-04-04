@@ -2,11 +2,17 @@ import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
+from sqlalchemy import create_engine
 
 # ----------------------------
 # PAGE CONFIG
 # ----------------------------
 st.set_page_config(page_title="Inventory System", layout="wide")
+
+# ----------------------------
+# DB CONNECTION
+# ----------------------------
+engine = create_engine(st.secrets["DB_URL"])
 
 # ----------------------------
 # CUSTOM UI STYLING
@@ -27,15 +33,29 @@ h1, h2, h3 {color: #f9fafb;}
 """, unsafe_allow_html=True)
 
 # ----------------------------
-# LOAD DATA
+# LOAD DATA FROM DATABASE
 # ----------------------------
-df = pd.read_excel("zepto_v1.xlsx")
-df = df.dropna(subset=['mrp', 'quantity', 'availableQuantity'])
+@st.cache_data
+def load_data():
+    try:
+        df = pd.read_sql("SELECT * FROM inventory", engine)
+        return df
+    except:
+        return pd.DataFrame()
+
+df = load_data()
+
+# ----------------------------
+# HANDLE EMPTY DB
+# ----------------------------
+if df.empty:
+    st.warning("⚠️ No data found. Please upload CSV from sidebar.")
+    st.stop()
 
 # ----------------------------
 # CALCULATIONS
 # ----------------------------
-df['demand'] = df['quantity']
+df['demand'] = df['demand'].replace(0, 1)
 
 S = 50
 df['holding_cost'] = 0.1 * df['mrp']
@@ -48,10 +68,11 @@ lead_time = 2
 df['safety_stock'] = df['demand'].std() * np.sqrt(lead_time)
 
 df['ROP'] = (df['demand'].mean() * lead_time) + df['safety_stock']
-df['reorder_flag'] = df['availableQuantity'] < df['ROP']
+
+df['reorder_flag'] = df['available_quantity'] < df['ROP']
 
 df['recommendation'] = df.apply(
-    lambda x: f"Order {max(1,int(x['EOQ']))}" if x['reorder_flag'] else "OK",
+    lambda x: f"Order {max(1, int(x['EOQ']))}" if x['reorder_flag'] else "OK",
     axis=1
 )
 
@@ -61,15 +82,46 @@ df['recommendation'] = df.apply(
 st.sidebar.markdown("## 📦 Inventory System")
 st.sidebar.markdown("---")
 
+# 🔥 CSV Upload (Dynamic Update)
+uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+
+if uploaded_file:
+    new_df = pd.read_csv(uploaded_file)
+
+    # Column mapping
+    new_df.rename(columns={
+        'name': 'product_name',
+        'Category': 'category',
+        'quantity': 'demand',
+        'availableQuantity': 'available_quantity'
+    }, inplace=True)
+
+    new_df = new_df[['product_name', 'category', 'mrp', 'demand', 'available_quantity']]
+
+    new_df['last_updated'] = pd.Timestamp.now()
+
+    new_df.to_sql("inventory", engine, if_exists="replace", index=False)
+
+    st.sidebar.success("✅ Database Updated!")
+
+    st.cache_data.clear()
+    st.rerun()
+
+# 🔄 Refresh button
+if st.sidebar.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
+# Navigation
 menu = st.sidebar.radio("Navigation", [
     "Dashboard",
     "Insights",
     "Data"
 ])
 
-category = st.sidebar.selectbox("Category", df['Category'].dropna().unique())
+category = st.sidebar.selectbox("Category", df['category'].dropna().unique())
 
-filtered_df = df[df['Category'] == category]
+filtered_df = df[df['category'] == category]
 
 # ----------------------------
 # DASHBOARD
@@ -78,24 +130,15 @@ if menu == "Dashboard":
 
     st.title("📊 Inventory Dashboard")
 
-    st.markdown("""
-    <div style='background:linear-gradient(90deg,#ef4444,#7c3aed);
-    padding:15px;border-radius:10px;margin-bottom:20px'>
-    🚀 Real-Time Inventory Insights
-    </div>
-    """, unsafe_allow_html=True)
-
-    # KPIs
-    col1, col2, col3, col4 = st.columns(4, gap="large")
+    col1, col2, col3, col4 = st.columns(4)
 
     col1.metric("📦 Products", len(df))
     col2.metric("⚠️ Reorders", int(df['reorder_flag'].sum()))
-    col3.metric("❌ Out of Stock", int(df['outOfStock'].sum()))
-    col4.metric("📊 Avg Demand", round(df['demand'].mean(), 2))
+    col3.metric("📊 Avg Demand", round(df['demand'].mean(), 2))
+    col4.metric("📉 Avg EOQ", round(df['EOQ'].mean(), 2))
 
     st.divider()
 
-    # ---------------- CHARTS ----------------
     col1, col2 = st.columns(2)
 
     with col1:
@@ -104,7 +147,7 @@ if menu == "Dashboard":
 
         fig = px.bar(
             top_products,
-            x='name',
+            x='product_name',
             y='demand',
             color='demand',
             template='plotly_dark'
@@ -114,26 +157,25 @@ if menu == "Dashboard":
     with col2:
         st.subheader("Stock vs ROP")
 
-        compare = filtered_df[['name','availableQuantity','ROP']].head(10)
+        compare = filtered_df[['product_name', 'available_quantity', 'ROP']].head(10)
 
         fig2 = px.line(
             compare,
-            x='name',
-            y=['availableQuantity','ROP'],
+            x='product_name',
+            y=['available_quantity', 'ROP'],
             template='plotly_dark'
         )
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ---------------- MORE CHARTS ----------------
     col3, col4 = st.columns(2)
 
     with col3:
         st.subheader("Category Demand")
-        cat = df.groupby('Category')['demand'].sum().reset_index()
+        cat = df.groupby('category')['demand'].sum().reset_index()
 
         fig3 = px.pie(
             cat,
-            names='Category',
+            names='category',
             values='demand',
             template='plotly_dark'
         )
@@ -144,7 +186,7 @@ if menu == "Dashboard":
 
         fig4 = px.histogram(
             filtered_df,
-            x='availableQuantity',
+            x='available_quantity',
             nbins=20,
             template='plotly_dark'
         )
@@ -160,25 +202,21 @@ elif menu == "Insights":
     alerts = filtered_df[filtered_df['reorder_flag'] == True]
 
     if len(alerts) > 0:
-        st.markdown(f"""
-        <div style='background:#7f1d1d;padding:15px;border-radius:10px'>
-        ⚠️ {len(alerts)} products need reorder!
-        </div>
-        """, unsafe_allow_html=True)
+        st.error(f"⚠️ {len(alerts)} products need reorder!")
     else:
         st.success("Inventory is healthy ✅")
 
     st.subheader("Critical Products")
 
     st.dataframe(
-        alerts[['name','availableQuantity','ROP','EOQ']],
+        alerts[['product_name', 'available_quantity', 'ROP', 'EOQ']],
         use_container_width=True
     )
 
     st.subheader("Recommendations")
 
     st.dataframe(
-        filtered_df[['name','recommendation']],
+        filtered_df[['product_name', 'recommendation']],
         use_container_width=True
     )
 
