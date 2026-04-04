@@ -42,11 +42,21 @@ if df.empty:
 def forecast_demand(df, product_name):
     product_df = df[df['product_name'] == product_name].copy()
 
-    product_df['ds'] = pd.date_range(end=pd.Timestamp.today(), periods=len(product_df))
-    product_df['y'] = product_df['demand']
+    # 🔥 HANDLE SINGLE ROW CASE (IMPORTANT FIX)
+    if len(product_df) < 2:
+        base_demand = product_df['demand'].values[0]
+
+        simulated_data = pd.DataFrame({
+            'ds': pd.date_range(end=pd.Timestamp.today(), periods=10),
+            'y': np.random.normal(base_demand, base_demand * 0.1, 10)
+        })
+    else:
+        simulated_data = product_df.copy()
+        simulated_data['ds'] = pd.date_range(end=pd.Timestamp.today(), periods=len(product_df))
+        simulated_data['y'] = simulated_data['demand']
 
     model = Prophet()
-    model.fit(product_df[['ds', 'y']])
+    model.fit(simulated_data[['ds', 'y']])
 
     future = model.make_future_dataframe(periods=7)
     forecast = model.predict(future)
