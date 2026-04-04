@@ -237,3 +237,6 @@ elif menu == "Data":
         "inventory.csv",
         "text/csv"
     )
+st.write("DB connected")
+st.write("Rows:", len(df))
+st.dataframe(df.head())
