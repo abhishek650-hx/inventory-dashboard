@@ -1,6 +1,6 @@
-streamlit
+sqlalchemy
+psycopg2-binary
 pandas
 numpy
+streamlit
 plotly
-openpyxl
-altair==4.2.2
