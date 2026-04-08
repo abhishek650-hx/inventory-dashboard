@@ -45,21 +45,15 @@ category_factor = {
 
 df['category_factor'] = df['category'].map(category_factor).fillna(1)
 
-# Realistic demand (log-normal → heavy tail)
 df['demand'] = np.random.lognormal(
     mean=np.log(400 * df['category_factor']),
-    sigma=0.6,
+    sigma=0.5,
     size=len(df)
-).clip(50, 2000)
+).clip(50, 1000)
 
-# Stock variability
 df['available_quantity'] = np.random.randint(100, 1200, len(df))
-
-# Lead time variability
 df['lead_time'] = np.random.randint(2, 10, len(df))
-
-# Demand variability
-df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.5, len(df))
+df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.4, len(df))
 
 # ----------------------------
 # 🔥 INVENTORY CALCULATIONS
@@ -67,12 +61,12 @@ df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.5, len(df))
 S = 50
 Z = 1.65
 
-df['holding_cost'] = (0.1 * df['mrp']).replace(0, 0.1)
+# Stabilized holding cost
+df['holding_cost'] = (0.15 * df['mrp']).clip(5, 50)
 
 df['EOQ'] = np.sqrt((2 * df['demand'] * S) / df['holding_cost'])
 
 df['safety_stock'] = Z * df['demand_std'] * np.sqrt(df['lead_time'])
-
 df['ROP'] = (df['demand'] * df['lead_time']) + df['safety_stock']
 
 df['reorder_flag'] = df['available_quantity'] < df['ROP']
@@ -83,14 +77,18 @@ df['recommendation'] = df.apply(
 )
 
 # ----------------------------
-# 🔥 ADVANCED FORECAST FUNCTION
+# 🔥 PRODUCT-SPECIFIC FORECAST
 # ----------------------------
-def generate_timeseries(base_demand):
+def generate_timeseries(product_name, base_demand):
     periods = 60
     dates = pd.date_range(end=pd.Timestamp.today(), periods=periods)
 
-    trend_type = np.random.choice(["up", "down", "flat"])
+    # unique seed per product
+    seed = abs(hash(product_name)) % (10**6)
+    np.random.seed(seed)
 
+    # trend
+    trend_type = np.random.choice(["up", "down", "flat"])
     if trend_type == "up":
         trend = np.linspace(0, np.random.randint(20, 120), periods)
     elif trend_type == "down":
@@ -98,11 +96,19 @@ def generate_timeseries(base_demand):
     else:
         trend = np.zeros(periods)
 
-    seasonality = np.random.randint(20, 80) * np.sin(
-        np.linspace(0, np.random.randint(2, 6) * np.pi, periods)
-    )
+    # seasonality
+    season_type = np.random.choice(["weekly", "irregular", "none"])
+    if season_type == "weekly":
+        seasonality = 40 * np.sin(np.linspace(0, 6*np.pi, periods))
+    elif season_type == "irregular":
+        seasonality = np.random.randint(10, 60) * np.sin(
+            np.linspace(0, np.random.randint(2, 8)*np.pi, periods)
+        )
+    else:
+        seasonality = np.zeros(periods)
 
-    noise = np.random.normal(0, base_demand * 0.1, periods)
+    # noise
+    noise = np.random.normal(0, base_demand * np.random.uniform(0.05, 0.2), periods)
 
     y = base_demand + trend + seasonality + noise
 
@@ -112,7 +118,7 @@ def generate_timeseries(base_demand):
 def forecast_demand(product_name):
     base_demand = df[df['product_name'] == product_name]['demand'].values[0]
 
-    ts = generate_timeseries(base_demand)
+    ts = generate_timeseries(product_name, base_demand)
 
     model = Prophet()
     model.fit(ts)
@@ -193,9 +199,7 @@ if menu == "Dashboard":
                       template='plotly_dark')
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ----------------------------
-    # FORECAST
-    # ----------------------------
+    # Forecast
     st.subheader("📈 Demand Forecast")
 
     selected_product = st.selectbox("Select Product", df['product_name'].unique())
@@ -205,16 +209,13 @@ if menu == "Dashboard":
     fig_forecast = px.line(forecast, x='ds', y='yhat', template='plotly_dark')
     st.plotly_chart(fig_forecast, use_container_width=True)
 
-    # ----------------------------
-    # NEW VISUALIZATIONS
-    # ----------------------------
+    # Additional charts
     st.divider()
 
     col3, col4 = st.columns(2)
 
     with col3:
         st.subheader("Category Demand Share")
-
         cat_data = df.groupby('category')['demand'].sum().reset_index()
 
         fig_pie = px.pie(cat_data, names='category', values='demand',
@@ -227,13 +228,6 @@ if menu == "Dashboard":
         fig_hist = px.histogram(df, x='demand', nbins=30,
                                 template='plotly_dark')
         st.plotly_chart(fig_hist, use_container_width=True)
-
-    # EOQ Distribution
-    st.subheader("EOQ Distribution")
-
-    fig_eoq = px.histogram(df, x='EOQ', nbins=30,
-                           template='plotly_dark')
-    st.plotly_chart(fig_eoq, use_container_width=True)
 
 # ----------------------------
 # INSIGHTS
