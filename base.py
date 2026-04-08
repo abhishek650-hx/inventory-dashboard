@@ -33,7 +33,7 @@ if df.empty:
     st.stop()
 
 # ----------------------------
-# DATA VARIABILITY
+# 🔥 FIXED DATA VARIABILITY
 # ----------------------------
 np.random.seed(42)
 
@@ -45,11 +45,15 @@ category_factor = {
 
 df['category_factor'] = df['category'].map(category_factor).fillna(1)
 
+# ✅ FIXED DISTRIBUTION (LESS SKEWED)
 df['demand'] = np.random.lognormal(
-    mean=np.log(400 * df['category_factor']),
-    sigma=0.5,
+    mean=np.log(350 * df['category_factor']),
+    sigma=0.35,
     size=len(df)
-).clip(50, 1000)
+).clip(50, 800)
+
+# ✅ ADD PRODUCT-LEVEL VARIABILITY
+df['demand'] = df['demand'] * np.random.uniform(0.7, 1.4, len(df))
 
 df['available_quantity'] = np.random.randint(100, 1200, len(df))
 df['lead_time'] = np.random.randint(2, 10, len(df))
@@ -76,13 +80,12 @@ df['recommendation'] = df.apply(
 )
 
 # ----------------------------
-# FORECAST FUNCTION (FIXED)
+# FORECAST FUNCTION
 # ----------------------------
 def generate_timeseries(product_name, base_demand):
     periods = 60
     dates = pd.date_range(end=pd.Timestamp.today(), periods=periods)
 
-    # Better unique seed
     seed = abs(hash(product_name + str(base_demand))) % (10**6)
     np.random.seed(seed)
 
@@ -184,26 +187,48 @@ if menu == "Dashboard":
 
     col1, col2 = st.columns(2)
 
+    # ----------------------------
+    # ✅ FIXED TOP PRODUCTS
+    # ----------------------------
     with col1:
         st.subheader("Top Demand Products")
+
         top_products = filtered_df.sort_values(by='demand', ascending=False).head(10)
 
-        fig = px.bar(top_products, x='product_name', y='demand',
-                     color='demand', template='plotly_dark')
+        fig = px.bar(
+            top_products,
+            x='product_name',
+            y='demand',
+            color='demand',
+            template='plotly_dark'
+        )
+
+        fig.update_layout(xaxis_tickangle=-45)
+
         st.plotly_chart(fig, use_container_width=True)
 
+    # ----------------------------
+    # STOCK VS ROP
+    # ----------------------------
     with col2:
         st.subheader("Stock vs ROP")
+
         compare = filtered_df[['product_name', 'available_quantity', 'ROP']].head(10)
 
-        fig2 = px.bar(compare, x='product_name',
-                      y=['available_quantity', 'ROP'],
-                      barmode='group',
-                      template='plotly_dark')
+        fig2 = px.bar(
+            compare,
+            x='product_name',
+            y=['available_quantity', 'ROP'],
+            barmode='group',
+            template='plotly_dark'
+        )
+
+        fig2.update_layout(xaxis_tickangle=-45)
+
         st.plotly_chart(fig2, use_container_width=True)
 
     # ----------------------------
-    # FORECAST (FIXED)
+    # FORECAST
     # ----------------------------
     st.subheader("📈 Demand Forecast")
 
@@ -221,7 +246,7 @@ if menu == "Dashboard":
         st.warning("No forecast data available.")
 
     # ----------------------------
-    # EXTRA VISUALS
+    # DISTRIBUTION
     # ----------------------------
     st.divider()
 
@@ -229,6 +254,7 @@ if menu == "Dashboard":
 
     with col3:
         st.subheader("Category Demand Share")
+
         cat_data = df.groupby('category')['demand'].sum().reset_index()
 
         fig_pie = px.pie(cat_data, names='category', values='demand',
@@ -237,11 +263,12 @@ if menu == "Dashboard":
 
     with col4:
         st.subheader("Demand Distribution")
+
         fig_hist = px.histogram(df, x='demand', nbins=30,
                                 template='plotly_dark')
         st.plotly_chart(fig_hist, use_container_width=True)
 
-    # Box Plot
+    # BOX
     st.subheader("Demand Variability (Box Plot)")
 
     fig_box = px.box(
@@ -254,7 +281,7 @@ if menu == "Dashboard":
 
     st.plotly_chart(fig_box, use_container_width=True)
 
-    # Heatmap
+    # HEATMAP
     st.subheader("Category Performance Heatmap")
 
     heatmap_data = df.groupby('category')[['demand', 'available_quantity', 'ROP']].mean()
