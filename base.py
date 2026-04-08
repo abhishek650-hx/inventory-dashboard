@@ -8,7 +8,7 @@ from prophet import Prophet
 # ----------------------------
 # PAGE CONFIG
 # ----------------------------
-st.set_page_config(page_title="Inventory System", layout="wide")
+st.set_page_config(page_title="Inventory Intelligence Dashboard", layout="wide")
 
 # ----------------------------
 # DB CONNECTION
@@ -16,7 +16,7 @@ st.set_page_config(page_title="Inventory System", layout="wide")
 try:
     engine = create_engine(st.secrets["DB_URL"])
 except:
-    st.error("❌ Database connection failed.")
+    st.error("Database connection failed")
     st.stop()
 
 # ----------------------------
@@ -29,36 +29,24 @@ def load_data():
 df = load_data()
 
 if df.empty:
-    st.warning("⚠️ No data found.")
+    st.warning("No data available")
     st.stop()
 
 # ----------------------------
-# DATA VARIABILITY
+# DATA ENGINEERING
 # ----------------------------
 np.random.seed(42)
 
-category_factor = {
-    "vegetables": 1.2,
-    "fruits": 0.9,
-    "dairy": 1.5
-}
-
-df['category_factor'] = df['category'].map(category_factor).fillna(1)
-
-df['demand'] = np.random.lognormal(
-    mean=np.log(350 * df['category_factor']),
-    sigma=0.35,
-    size=len(df)
-).clip(50, 800)
-
-df['demand'] = df['demand'] * np.random.uniform(0.7, 1.4, len(df))
+df['demand'] = np.random.lognormal(mean=np.log(350), sigma=0.35, size=len(df)).clip(50, 800)
+df['demand'] *= np.random.uniform(0.7, 1.4, len(df))
 
 df['available_quantity'] = np.random.randint(100, 1200, len(df))
-df['lead_time'] = np.random.randint(2, 10, len(df))
+df['lead_time'] = np.random.randint(2, 10, len(df)
+)
 df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.4, len(df))
 
 # ----------------------------
-# INVENTORY CALCULATIONS
+# INVENTORY LOGIC
 # ----------------------------
 S = 50
 Z = 1.65
@@ -66,20 +54,12 @@ Z = 1.65
 df['holding_cost'] = (0.15 * df['mrp']).clip(5, 50)
 
 df['EOQ'] = np.sqrt((2 * df['demand'] * S) / df['holding_cost'])
-
 df['safety_stock'] = Z * df['demand_std'] * np.sqrt(df['lead_time'])
 df['ROP'] = (df['demand'] * df['lead_time']) + df['safety_stock']
 
 df['reorder_flag'] = df['available_quantity'] < df['ROP']
 
-df['recommendation'] = df.apply(
-    lambda x: f"Order {int(x['EOQ'])}" if x['reorder_flag'] else "OK",
-    axis=1
-)
-
-# ----------------------------
-# DEMAND CATEGORY
-# ----------------------------
+# Demand categories
 df['demand_category'] = pd.cut(
     df['demand'],
     bins=[0, 200, 400, 600, 800, 1000],
@@ -87,17 +67,15 @@ df['demand_category'] = pd.cut(
 )
 
 # ----------------------------
-# FORECAST FUNCTION (REALISTIC)
+# FORECAST FUNCTION
 # ----------------------------
 def generate_timeseries(product_name, base_demand):
     periods = 60
     dates = pd.date_range(end=pd.Timestamp.today(), periods=periods)
 
-    seed = abs(hash(product_name + str(base_demand))) % (10**6)
-    np.random.seed(seed)
+    np.random.seed(abs(hash(product_name)) % (10**6))
 
     trend = np.linspace(0, np.random.randint(-50, 100), periods)
-
     seasonality = 30 * np.sin(np.linspace(0, 6*np.pi, periods))
     seasonality += np.random.normal(0, 10, periods)
 
@@ -108,178 +86,146 @@ def generate_timeseries(product_name, base_demand):
 
     return pd.DataFrame({'ds': dates, 'y': y})
 
-
-def forecast_demand(product_name, filtered_df):
-    product_data = filtered_df[filtered_df['product_name'] == product_name]
-
-    if product_data.empty:
-        return None
-
-    base_demand = product_data['demand'].values[0]
-
-    ts = generate_timeseries(product_name, base_demand)
+def forecast_demand(product_name):
+    base = df[df['product_name'] == product_name]['demand'].values[0]
+    ts = generate_timeseries(product_name, base)
 
     model = Prophet()
     model.fit(ts)
 
     future = model.make_future_dataframe(periods=7)
-    forecast = model.predict(future)
-
-    return forecast
+    return model.predict(future)
 
 # ----------------------------
 # SIDEBAR
 # ----------------------------
-st.sidebar.title("📦 Inventory System")
+st.sidebar.title("Inventory Controls")
 
-if st.sidebar.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-menu = st.sidebar.radio("Navigation", ["Dashboard", "Insights", "Data"])
-
-category = st.sidebar.selectbox("Category", df['category'].dropna().unique())
+category = st.sidebar.selectbox("Select Category", df['category'].unique())
 filtered_df = df[df['category'] == category]
+
+menu = st.sidebar.radio("View", ["Dashboard", "Insights", "Data"])
 
 # ----------------------------
 # DASHBOARD
 # ----------------------------
 if menu == "Dashboard":
 
-    st.title("📊 Inventory Dashboard")
+    st.title("Inventory Intelligence Dashboard")
 
-    # KPI
+    # KPI CARDS
     col1, col2, col3 = st.columns(3)
 
-    col1.metric("📦 Total Products", len(df))
-    col2.metric("⚠️ Reorders Needed", int(df['reorder_flag'].sum()))
-    col3.metric("🚨 Critical Items", len(df[df['available_quantity'] < df['ROP']*0.8]))
+    col1.metric("Total Products", len(df))
+    col2.metric("Reorders Needed", int(df['reorder_flag'].sum()))
+    col3.metric("Critical Items", len(df[df['available_quantity'] < df['ROP']*0.8]))
 
     st.divider()
 
     col1, col2 = st.columns(2)
 
-    # 🔥 TOP PRODUCTS (FIXED UI)
+    # TOP PRODUCTS
     with col1:
         st.subheader("Top Demand Products")
 
-        top_products = filtered_df.sort_values(by='demand', ascending=False).head(10)
+        top = filtered_df.sort_values(by='demand', ascending=False).head(10)
 
-        top_products['status'] = np.where(
-            top_products['available_quantity'] < top_products['ROP'],
-            "Critical",
-            "Normal"
+        top['status'] = np.where(
+            top['available_quantity'] < top['ROP'],
+            "Critical", "Normal"
         )
 
         fig = px.bar(
-            top_products,
+            top,
             y='product_name',
             x='demand',
             color='status',
             orientation='h',
-            color_discrete_map={
-                "Normal": "#4C78A8",
-                "Critical": "#E45756"
-            },
-            template='plotly_dark'
+            color_discrete_map={"Normal": "#4C78A8", "Critical": "#E45756"},
+            labels={"demand": "Demand (Units)"}
         )
 
         fig.update_layout(yaxis=dict(autorange="reversed"))
-
         st.plotly_chart(fig, use_container_width=True)
 
     # STOCK VS ROP
     with col2:
-        st.subheader("Stock vs ROP")
-
-        compare = filtered_df[['product_name', 'available_quantity', 'ROP']].head(10)
+        st.subheader("Stock vs Reorder Point")
 
         fig2 = px.bar(
-            compare,
+            filtered_df.head(10),
             y='product_name',
             x=['available_quantity', 'ROP'],
             orientation='h',
             barmode='group',
-            template='plotly_dark'
+            labels={
+                "value": "Stock Level (Units)",
+                "variable": "Metric"
+            }
         )
 
         fig2.update_layout(yaxis=dict(autorange="reversed"))
-
         st.plotly_chart(fig2, use_container_width=True)
 
     # FORECAST
-    st.subheader("📈 Demand Forecast")
+    st.subheader("Demand Forecast")
 
-    selected_product = st.selectbox("Select Product", filtered_df['product_name'].unique())
+    product = st.selectbox("Select Product", filtered_df['product_name'].unique())
+    forecast = forecast_demand(product)
 
-    forecast = forecast_demand(selected_product, filtered_df)
+    fig3 = px.line(forecast, x='ds', y='yhat', labels={"yhat": "Forecasted Demand"})
+    st.plotly_chart(fig3, use_container_width=True)
 
-    if forecast is not None:
-        fig_forecast = px.line(forecast, x='ds', y='yhat', template='plotly_dark')
-        st.plotly_chart(fig_forecast, use_container_width=True)
-
-    # DISTRIBUTION
     st.divider()
 
     col3, col4 = st.columns(2)
 
+    # PIE
     with col3:
-        st.subheader("Category Demand Share")
+        st.subheader("Category Share")
 
-        cat_data = df.groupby('category')['demand'].sum().reset_index()
+        fig4 = px.pie(
+            df.groupby('category')['demand'].sum().reset_index(),
+            names='category',
+            values='demand'
+        )
+        st.plotly_chart(fig4, use_container_width=True)
 
-        fig_pie = px.pie(cat_data, names='category', values='demand', template='plotly_dark')
-        st.plotly_chart(fig_pie, use_container_width=True)
-
+    # HISTOGRAM
     with col4:
         st.subheader("Demand Distribution")
 
-        fig_hist = px.histogram(
+        fig5 = px.histogram(
             df,
             x='demand_category',
-            color='demand_category',
-            template='plotly_dark'
+            color='demand_category'
         )
-
-        st.plotly_chart(fig_hist, use_container_width=True)
+        st.plotly_chart(fig5, use_container_width=True)
 
     # HEATMAP (FIXED)
-    st.subheader("Category Performance Heatmap")
+    st.subheader("Category Performance")
 
-    heatmap_data = df.groupby('category')[['demand', 'available_quantity', 'ROP']].mean()
+    heat = df.groupby('category')[['demand', 'available_quantity', 'ROP']].mean()
+    heat_norm = (heat - heat.min()) / (heat.max() - heat.min())
 
-    heatmap_norm = (heatmap_data - heatmap_data.min()) / (heatmap_data.max() - heatmap_data.min())
-
-    fig_heatmap = px.imshow(
-        heatmap_norm,
-        text_auto=True,
-        aspect="auto",
-        color_continuous_scale='RdYlBu'
+    fig6 = px.imshow(
+        heat_norm,
+        color_continuous_scale='RdYlGn'
     )
-
-    st.plotly_chart(fig_heatmap, use_container_width=True)
+    st.plotly_chart(fig6, use_container_width=True)
 
 # ----------------------------
 # INSIGHTS
 # ----------------------------
 elif menu == "Insights":
-
-    st.title("📊 Inventory Insights")
+    st.title("Inventory Alerts")
 
     alerts = filtered_df[filtered_df['reorder_flag']]
-
-    if len(alerts) > 0:
-        st.error(f"⚠️ {len(alerts)} products need reorder!")
-    else:
-        st.success("Inventory is healthy ✅")
-
-    st.dataframe(alerts[['product_name', 'available_quantity', 'ROP', 'EOQ']])
+    st.dataframe(alerts)
 
 # ----------------------------
 # DATA
 # ----------------------------
 elif menu == "Data":
-
-    st.title("📋 Inventory Data")
-
+    st.title("Raw Data")
     st.dataframe(filtered_df)
