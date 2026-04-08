@@ -24,8 +24,7 @@ except:
 # ----------------------------
 @st.cache_data
 def load_data():
-    df = pd.read_sql("SELECT * FROM inventory", engine)
-    return df
+    return pd.read_sql("SELECT * FROM inventory", engine)
 
 df = load_data()
 
@@ -34,49 +33,48 @@ if df.empty:
     st.stop()
 
 # ----------------------------
-# 🔥 DATA ENHANCEMENT (CRITICAL FIX)
+# 🔥 ADVANCED DATA VARIABILITY
 # ----------------------------
 np.random.seed(42)
 
-# Add variability to demand
-df['demand'] = np.where(
-    df['demand'] <= 0,
-    np.random.normal(400, 100, len(df)),
-    df['demand']
-)
+category_factor = {
+    "vegetables": 1.2,
+    "fruits": 0.9,
+    "dairy": 1.5
+}
 
-# Add variability to stock
-df['available_quantity'] = np.where(
-    df['available_quantity'] <= 0,
-    np.random.randint(100, 800, len(df)),
-    df['available_quantity']
-)
+df['category_factor'] = df['category'].map(category_factor).fillna(1)
 
-# Add lead time variability
-df['lead_time'] = np.random.randint(2, 8, len(df))
+# Realistic demand (log-normal → heavy tail)
+df['demand'] = np.random.lognormal(
+    mean=np.log(400 * df['category_factor']),
+    sigma=0.6,
+    size=len(df)
+).clip(50, 2000)
 
-# Demand variability (std proxy)
-df['demand_std'] = df['demand'] * np.random.uniform(0.1, 0.3, len(df))
+# Stock variability
+df['available_quantity'] = np.random.randint(100, 1200, len(df))
+
+# Lead time variability
+df['lead_time'] = np.random.randint(2, 10, len(df))
+
+# Demand variability
+df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.5, len(df))
 
 # ----------------------------
-# 🔥 INVENTORY CALCULATIONS (FIXED)
+# 🔥 INVENTORY CALCULATIONS
 # ----------------------------
-S = 50  # ordering cost
-Z = 1.65  # 95% service level
+S = 50
+Z = 1.65
 
-df['holding_cost'] = 0.1 * df['mrp']
-df['holding_cost'] = df['holding_cost'].replace(0, 0.1)
+df['holding_cost'] = (0.1 * df['mrp']).replace(0, 0.1)
 
-# EOQ (product-wise)
 df['EOQ'] = np.sqrt((2 * df['demand'] * S) / df['holding_cost'])
 
-# Safety Stock (product-wise)
 df['safety_stock'] = Z * df['demand_std'] * np.sqrt(df['lead_time'])
 
-# ROP (product-wise)
 df['ROP'] = (df['demand'] * df['lead_time']) + df['safety_stock']
 
-# Reorder logic
 df['reorder_flag'] = df['available_quantity'] < df['ROP']
 
 df['recommendation'] = df.apply(
@@ -85,15 +83,26 @@ df['recommendation'] = df.apply(
 )
 
 # ----------------------------
-# 🔥 IMPROVED FORECAST FUNCTION
+# 🔥 ADVANCED FORECAST FUNCTION
 # ----------------------------
 def generate_timeseries(base_demand):
     periods = 60
     dates = pd.date_range(end=pd.Timestamp.today(), periods=periods)
 
-    trend = np.linspace(0, 50, periods)
-    seasonality = 40 * np.sin(np.linspace(0, 3*np.pi, periods))
-    noise = np.random.normal(0, 20, periods)
+    trend_type = np.random.choice(["up", "down", "flat"])
+
+    if trend_type == "up":
+        trend = np.linspace(0, np.random.randint(20, 120), periods)
+    elif trend_type == "down":
+        trend = np.linspace(0, -np.random.randint(20, 120), periods)
+    else:
+        trend = np.zeros(periods)
+
+    seasonality = np.random.randint(20, 80) * np.sin(
+        np.linspace(0, np.random.randint(2, 6) * np.pi, periods)
+    )
+
+    noise = np.random.normal(0, base_demand * 0.1, periods)
 
     y = base_demand + trend + seasonality + noise
 
@@ -168,30 +177,20 @@ if menu == "Dashboard":
 
     with col1:
         st.subheader("Top Demand Products")
-
         top_products = filtered_df.sort_values(by='demand', ascending=False).head(10)
 
-        fig = px.bar(
-            top_products,
-            x='product_name',
-            y='demand',
-            color='demand',
-            template='plotly_dark'
-        )
+        fig = px.bar(top_products, x='product_name', y='demand',
+                     color='demand', template='plotly_dark')
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
         st.subheader("Stock vs ROP")
-
         compare = filtered_df[['product_name', 'available_quantity', 'ROP']].head(10)
 
-        fig2 = px.bar(
-            compare,
-            x='product_name',
-            y=['available_quantity', 'ROP'],
-            barmode='group',
-            template='plotly_dark'
-        )
+        fig2 = px.bar(compare, x='product_name',
+                      y=['available_quantity', 'ROP'],
+                      barmode='group',
+                      template='plotly_dark')
         st.plotly_chart(fig2, use_container_width=True)
 
     # ----------------------------
@@ -199,21 +198,42 @@ if menu == "Dashboard":
     # ----------------------------
     st.subheader("📈 Demand Forecast")
 
-    selected_product = st.selectbox(
-        "Select Product",
-        df['product_name'].unique()
-    )
+    selected_product = st.selectbox("Select Product", df['product_name'].unique())
 
     forecast = forecast_demand(selected_product)
 
-    fig_forecast = px.line(
-        forecast,
-        x='ds',
-        y='yhat',
-        template='plotly_dark'
-    )
-
+    fig_forecast = px.line(forecast, x='ds', y='yhat', template='plotly_dark')
     st.plotly_chart(fig_forecast, use_container_width=True)
+
+    # ----------------------------
+    # NEW VISUALIZATIONS
+    # ----------------------------
+    st.divider()
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        st.subheader("Category Demand Share")
+
+        cat_data = df.groupby('category')['demand'].sum().reset_index()
+
+        fig_pie = px.pie(cat_data, names='category', values='demand',
+                         template='plotly_dark')
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col4:
+        st.subheader("Demand Distribution")
+
+        fig_hist = px.histogram(df, x='demand', nbins=30,
+                                template='plotly_dark')
+        st.plotly_chart(fig_hist, use_container_width=True)
+
+    # EOQ Distribution
+    st.subheader("EOQ Distribution")
+
+    fig_eoq = px.histogram(df, x='EOQ', nbins=30,
+                           template='plotly_dark')
+    st.plotly_chart(fig_eoq, use_container_width=True)
 
 # ----------------------------
 # INSIGHTS
