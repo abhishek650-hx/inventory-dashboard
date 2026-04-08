@@ -33,7 +33,7 @@ if df.empty:
     st.stop()
 
 # ----------------------------
-# 🔥 FIXED DATA VARIABILITY
+# DATA VARIABILITY
 # ----------------------------
 np.random.seed(42)
 
@@ -45,14 +45,12 @@ category_factor = {
 
 df['category_factor'] = df['category'].map(category_factor).fillna(1)
 
-# ✅ FIXED DISTRIBUTION (LESS SKEWED)
 df['demand'] = np.random.lognormal(
     mean=np.log(350 * df['category_factor']),
     sigma=0.35,
     size=len(df)
 ).clip(50, 800)
 
-# ✅ ADD PRODUCT-LEVEL VARIABILITY
 df['demand'] = df['demand'] * np.random.uniform(0.7, 1.4, len(df))
 
 df['available_quantity'] = np.random.randint(100, 1200, len(df))
@@ -80,7 +78,16 @@ df['recommendation'] = df.apply(
 )
 
 # ----------------------------
-# FORECAST FUNCTION
+# DEMAND CATEGORY
+# ----------------------------
+df['demand_category'] = pd.cut(
+    df['demand'],
+    bins=[0, 200, 400, 600, 800, 1000],
+    labels=["Low", "Moderate", "High", "Very High", "Extreme"]
+)
+
+# ----------------------------
+# FORECAST FUNCTION (REALISTIC)
 # ----------------------------
 def generate_timeseries(product_name, base_demand):
     periods = 60
@@ -89,29 +96,15 @@ def generate_timeseries(product_name, base_demand):
     seed = abs(hash(product_name + str(base_demand))) % (10**6)
     np.random.seed(seed)
 
-    trend_type = np.random.choice(["up", "down", "flat"])
+    trend = np.linspace(0, np.random.randint(-50, 100), periods)
 
-    if trend_type == "up":
-        trend = np.linspace(0, np.random.randint(20, 120), periods)
-    elif trend_type == "down":
-        trend = np.linspace(0, -np.random.randint(20, 120), periods)
-    else:
-        trend = np.zeros(periods)
+    seasonality = 30 * np.sin(np.linspace(0, 6*np.pi, periods))
+    seasonality += np.random.normal(0, 10, periods)
 
-    season_type = np.random.choice(["weekly", "irregular", "none"])
-
-    if season_type == "weekly":
-        seasonality = 40 * np.sin(np.linspace(0, 6*np.pi, periods))
-    elif season_type == "irregular":
-        seasonality = np.random.randint(10, 60) * np.sin(
-            np.linspace(0, np.random.randint(2, 8)*np.pi, periods)
-        )
-    else:
-        seasonality = np.zeros(periods)
-
-    noise = np.random.normal(0, base_demand * np.random.uniform(0.05, 0.2), periods)
+    noise = np.random.normal(0, base_demand * 0.1, periods)
 
     y = base_demand + trend + seasonality + noise
+    y = np.clip(y, base_demand * 0.5, base_demand * 1.8)
 
     return pd.DataFrame({'ds': dates, 'y': y})
 
@@ -143,27 +136,6 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.cache_data.clear()
     st.rerun()
 
-uploaded_file = st.sidebar.file_uploader("Upload CSV", type=["csv"])
-
-if uploaded_file:
-    new_df = pd.read_csv(uploaded_file)
-
-    new_df.rename(columns={
-        'name': 'product_name',
-        'Category': 'category',
-        'quantity': 'demand',
-        'availableQuantity': 'available_quantity'
-    }, inplace=True)
-
-    new_df = new_df[['product_name', 'category', 'mrp', 'demand', 'available_quantity']]
-    new_df['last_updated'] = pd.Timestamp.now()
-
-    new_df.to_sql("inventory", engine, if_exists="replace", index=False)
-
-    st.sidebar.success("✅ Database updated!")
-    st.cache_data.clear()
-    st.rerun()
-
 menu = st.sidebar.radio("Navigation", ["Dashboard", "Insights", "Data"])
 
 category = st.sidebar.selectbox("Category", df['category'].dropna().unique())
@@ -176,40 +148,47 @@ if menu == "Dashboard":
 
     st.title("📊 Inventory Dashboard")
 
-    col1, col2, col3, col4 = st.columns(4)
+    # KPI
+    col1, col2, col3 = st.columns(3)
 
-    col1.metric("📦 Products", len(df))
-    col2.metric("⚠️ Reorders", int(df['reorder_flag'].sum()))
-    col3.metric("📊 Avg Demand", round(df['demand'].mean(), 2))
-    col4.metric("📉 Avg EOQ", round(df['EOQ'].mean(), 2))
+    col1.metric("📦 Total Products", len(df))
+    col2.metric("⚠️ Reorders Needed", int(df['reorder_flag'].sum()))
+    col3.metric("🚨 Critical Items", len(df[df['available_quantity'] < df['ROP']*0.8]))
 
     st.divider()
 
     col1, col2 = st.columns(2)
 
-    # ----------------------------
-    # ✅ FIXED TOP PRODUCTS
-    # ----------------------------
+    # 🔥 TOP PRODUCTS (FIXED UI)
     with col1:
         st.subheader("Top Demand Products")
 
         top_products = filtered_df.sort_values(by='demand', ascending=False).head(10)
 
+        top_products['status'] = np.where(
+            top_products['available_quantity'] < top_products['ROP'],
+            "Critical",
+            "Normal"
+        )
+
         fig = px.bar(
             top_products,
-            x='product_name',
-            y='demand',
-            color='demand',
+            y='product_name',
+            x='demand',
+            color='status',
+            orientation='h',
+            color_discrete_map={
+                "Normal": "#4C78A8",
+                "Critical": "#E45756"
+            },
             template='plotly_dark'
         )
 
-        fig.update_layout(xaxis_tickangle=-45)
+        fig.update_layout(yaxis=dict(autorange="reversed"))
 
         st.plotly_chart(fig, use_container_width=True)
 
-    # ----------------------------
     # STOCK VS ROP
-    # ----------------------------
     with col2:
         st.subheader("Stock vs ROP")
 
@@ -217,37 +196,29 @@ if menu == "Dashboard":
 
         fig2 = px.bar(
             compare,
-            x='product_name',
-            y=['available_quantity', 'ROP'],
+            y='product_name',
+            x=['available_quantity', 'ROP'],
+            orientation='h',
             barmode='group',
             template='plotly_dark'
         )
 
-        fig2.update_layout(xaxis_tickangle=-45)
+        fig2.update_layout(yaxis=dict(autorange="reversed"))
 
         st.plotly_chart(fig2, use_container_width=True)
 
-    # ----------------------------
     # FORECAST
-    # ----------------------------
     st.subheader("📈 Demand Forecast")
 
-    selected_product = st.selectbox(
-        "Select Product",
-        filtered_df['product_name'].unique()
-    )
+    selected_product = st.selectbox("Select Product", filtered_df['product_name'].unique())
 
     forecast = forecast_demand(selected_product, filtered_df)
 
     if forecast is not None:
         fig_forecast = px.line(forecast, x='ds', y='yhat', template='plotly_dark')
         st.plotly_chart(fig_forecast, use_container_width=True)
-    else:
-        st.warning("No forecast data available.")
 
-    # ----------------------------
     # DISTRIBUTION
-    # ----------------------------
     st.divider()
 
     col3, col4 = st.columns(2)
@@ -257,40 +228,33 @@ if menu == "Dashboard":
 
         cat_data = df.groupby('category')['demand'].sum().reset_index()
 
-        fig_pie = px.pie(cat_data, names='category', values='demand',
-                         template='plotly_dark')
+        fig_pie = px.pie(cat_data, names='category', values='demand', template='plotly_dark')
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col4:
         st.subheader("Demand Distribution")
 
-        fig_hist = px.histogram(df, x='demand', nbins=30,
-                                template='plotly_dark')
+        fig_hist = px.histogram(
+            df,
+            x='demand_category',
+            color='demand_category',
+            template='plotly_dark'
+        )
+
         st.plotly_chart(fig_hist, use_container_width=True)
 
-    # BOX
-    st.subheader("Demand Variability (Box Plot)")
-
-    fig_box = px.box(
-        df,
-        x='category',
-        y='demand',
-        color='category',
-        template='plotly_dark'
-    )
-
-    st.plotly_chart(fig_box, use_container_width=True)
-
-    # HEATMAP
+    # HEATMAP (FIXED)
     st.subheader("Category Performance Heatmap")
 
     heatmap_data = df.groupby('category')[['demand', 'available_quantity', 'ROP']].mean()
 
+    heatmap_norm = (heatmap_data - heatmap_data.min()) / (heatmap_data.max() - heatmap_data.min())
+
     fig_heatmap = px.imshow(
-        heatmap_data,
+        heatmap_norm,
         text_auto=True,
         aspect="auto",
-        color_continuous_scale='Blues'
+        color_continuous_scale='RdYlBu'
     )
 
     st.plotly_chart(fig_heatmap, use_container_width=True)
@@ -310,7 +274,6 @@ elif menu == "Insights":
         st.success("Inventory is healthy ✅")
 
     st.dataframe(alerts[['product_name', 'available_quantity', 'ROP', 'EOQ']])
-    st.dataframe(filtered_df[['product_name', 'recommendation']])
 
 # ----------------------------
 # DATA
@@ -320,7 +283,3 @@ elif menu == "Data":
     st.title("📋 Inventory Data")
 
     st.dataframe(filtered_df)
-
-    csv = filtered_df.to_csv(index=False)
-
-    st.download_button("📥 Download Data", csv, "inventory.csv", "text/csv")
