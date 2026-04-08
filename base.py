@@ -33,7 +33,7 @@ if df.empty:
     st.stop()
 
 # ----------------------------
-# 🔥 ADVANCED DATA VARIABILITY
+# DATA VARIABILITY
 # ----------------------------
 np.random.seed(42)
 
@@ -56,12 +56,11 @@ df['lead_time'] = np.random.randint(2, 10, len(df))
 df['demand_std'] = df['demand'] * np.random.uniform(0.15, 0.4, len(df))
 
 # ----------------------------
-# 🔥 INVENTORY CALCULATIONS
+# INVENTORY CALCULATIONS
 # ----------------------------
 S = 50
 Z = 1.65
 
-# Stabilized holding cost
 df['holding_cost'] = (0.15 * df['mrp']).clip(5, 50)
 
 df['EOQ'] = np.sqrt((2 * df['demand'] * S) / df['holding_cost'])
@@ -77,18 +76,17 @@ df['recommendation'] = df.apply(
 )
 
 # ----------------------------
-# 🔥 PRODUCT-SPECIFIC FORECAST
+# FORECAST FUNCTION
 # ----------------------------
 def generate_timeseries(product_name, base_demand):
     periods = 60
     dates = pd.date_range(end=pd.Timestamp.today(), periods=periods)
 
-    # unique seed per product
     seed = abs(hash(product_name)) % (10**6)
     np.random.seed(seed)
 
-    # trend
     trend_type = np.random.choice(["up", "down", "flat"])
+
     if trend_type == "up":
         trend = np.linspace(0, np.random.randint(20, 120), periods)
     elif trend_type == "down":
@@ -96,8 +94,8 @@ def generate_timeseries(product_name, base_demand):
     else:
         trend = np.zeros(periods)
 
-    # seasonality
     season_type = np.random.choice(["weekly", "irregular", "none"])
+
     if season_type == "weekly":
         seasonality = 40 * np.sin(np.linspace(0, 6*np.pi, periods))
     elif season_type == "irregular":
@@ -107,7 +105,6 @@ def generate_timeseries(product_name, base_demand):
     else:
         seasonality = np.zeros(periods)
 
-    # noise
     noise = np.random.normal(0, base_demand * np.random.uniform(0.05, 0.2), periods)
 
     y = base_demand + trend + seasonality + noise
@@ -181,6 +178,7 @@ if menu == "Dashboard":
 
     col1, col2 = st.columns(2)
 
+    # Top Products
     with col1:
         st.subheader("Top Demand Products")
         top_products = filtered_df.sort_values(by='demand', ascending=False).head(10)
@@ -189,6 +187,7 @@ if menu == "Dashboard":
                      color='demand', template='plotly_dark')
         st.plotly_chart(fig, use_container_width=True)
 
+    # Stock vs ROP
     with col2:
         st.subheader("Stock vs ROP")
         compare = filtered_df[['product_name', 'available_quantity', 'ROP']].head(10)
@@ -203,17 +202,19 @@ if menu == "Dashboard":
     st.subheader("📈 Demand Forecast")
 
     selected_product = st.selectbox("Select Product", df['product_name'].unique())
-
     forecast = forecast_demand(selected_product)
 
     fig_forecast = px.line(forecast, x='ds', y='yhat', template='plotly_dark')
     st.plotly_chart(fig_forecast, use_container_width=True)
 
-    # Additional charts
+    # ----------------------------
+    # EXTRA VISUALS
+    # ----------------------------
     st.divider()
 
     col3, col4 = st.columns(2)
 
+    # Pie
     with col3:
         st.subheader("Category Demand Share")
         cat_data = df.groupby('category')['demand'].sum().reset_index()
@@ -222,12 +223,43 @@ if menu == "Dashboard":
                          template='plotly_dark')
         st.plotly_chart(fig_pie, use_container_width=True)
 
+    # Histogram
     with col4:
         st.subheader("Demand Distribution")
-
         fig_hist = px.histogram(df, x='demand', nbins=30,
                                 template='plotly_dark')
         st.plotly_chart(fig_hist, use_container_width=True)
+
+    # ----------------------------
+    # 🔥 NEW: BOX PLOT
+    # ----------------------------
+    st.subheader("Demand Variability (Box Plot)")
+
+    fig_box = px.box(
+        df,
+        x='category',
+        y='demand',
+        color='category',
+        template='plotly_dark'
+    )
+
+    st.plotly_chart(fig_box, use_container_width=True)
+
+    # ----------------------------
+    # 🔥 NEW: HEATMAP
+    # ----------------------------
+    st.subheader("Category Performance Heatmap")
+
+    heatmap_data = df.groupby('category')[['demand', 'available_quantity', 'ROP']].mean()
+
+    fig_heatmap = px.imshow(
+        heatmap_data,
+        text_auto=True,
+        aspect="auto",
+        color_continuous_scale='Blues'
+    )
+
+    st.plotly_chart(fig_heatmap, use_container_width=True)
 
 # ----------------------------
 # INSIGHTS
